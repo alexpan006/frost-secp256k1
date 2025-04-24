@@ -1,0 +1,57 @@
+version: "3.8"
+
+services:
+  signer1:
+    build:
+      context: .
+      dockerfile: signer/Dockerfile
+    environment:
+      PARTY_ID: "1"
+      TOTAL: "3"
+      THRESHOLD: "2"
+    ports:
+      - "9000:8000"
+    volumes:
+      - signer1_state:/state
+
+  signer2:
+    build:
+      context: .
+      dockerfile: signer/Dockerfile
+    environment:
+      PARTY_ID: "2"
+      TOTAL: "3"
+      THRESHOLD: "2"
+    ports:
+      - "9001:8000"
+    volumes:
+      - signer2_state:/state
+
+  signer3:
+    build:
+      context: .
+      dockerfile: signer/Dockerfile
+    environment:
+      PARTY_ID: "3"
+      TOTAL: "3"
+      THRESHOLD: "2"
+    ports:
+      - "9002:8000"
+    volumes:
+      - signer3_state:/state
+
+  coordinator:
+    build:
+      context: .
+      dockerfile: coordinator/Dockerfile
+    environment:
+      - SIGNER_URLS=http://signer1:8000,http://signer2:8000,http://signer3:8000
+    depends_on:
+      - signer1
+      - signer2
+      - signer3
+
+volumes:
+  signer1_state:
+  signer2_state:
+  signer3_state:
