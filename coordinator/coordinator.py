@@ -4,7 +4,9 @@ import json
 import logging
 from typing import List, Tuple
 import os
-from bitcoinlib.keys import Key
+from bitcoinlib.keys import Key,Address
+import rust_tss as rust_tss
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,7 +22,7 @@ SIGNERS = signer_urls_str.split(",")
 
 
 
-async def check_dkg_status(client: httpx.AsyncClient) -> Tuple[bool, str]:
+async def check_dkg_status(client: httpx.AsyncClient) -> Tuple[bool, str,str]:
     """
     Checks if all signers have existing keys.
     Returns True if all signers have keys, False otherwise.
@@ -32,9 +34,9 @@ async def check_dkg_status(client: httpx.AsyncClient) -> Tuple[bool, str]:
         for status in statuses:
             if not status["is_exist"]:
                 logger.info(f"Signer {status['id']} does not have keys. DKG is needed.")
-                return (False,"")
+                return (False,"","")
         logger.info("All signers have existing keys. No DKG needed.")
-        return (True,statuses[0]["verify_key_hex"])
+        return (True,statuses[0]["verify_key_hex"],statuses[0]["pubkp_hex"])
     except Exception as e:
         logger.error(f"Failed to check DKG status: {e}")
         raise
@@ -51,10 +53,10 @@ async def run_dkg():
     """
     async with httpx.AsyncClient() as client:
         
-        is_exist, verify_key_hex = await check_dkg_status(client)
+        is_exist, verify_key_hex,pubkp = await check_dkg_status(client)
         if is_exist:
             logger.info("All signers have keys. No DKG needed.")
-            return verify_key_hex
+            return verify_key_hex,pubkp
         logger.info("Starting DKG process...")
 
         
@@ -142,21 +144,59 @@ async def run_dkg():
 
         # Extract group verifying key (should be the same for all signers)
         verify_key_hex = round3_data[0]["verify_key_hex"]
-        logger.info(f"DKG completed. Group Verifying Key: {verify_key_hex}")
+        pubkp_hex = round3_data[0]["pubkp_hex"]
+        logger.info(f"DKG completed. Group Verifying Key: {verify_key_hex}. Public Key Pkg: {pubkp_hex}")
 
-        return verify_key_hex
+        return verify_key_hex,pubkp_hex
+
+
+async def coordinate_frost_sign(message: str, pubkp_hex: str):
+    message_bytes = message.encode()
+    message_hex = message_bytes.hex()
+
+    async with httpx.AsyncClient() as client:
+        # --- Round 1: Get commitments from each signer
+        logger.info("Starting Frost Sign Round 1, sending out to signers...")
+        round1_tasks = [client.post(f"{signer}/sign/round1") for signer in SIGNERS]
+        round1_responses = await asyncio.gather(*round1_tasks)
+        round1_commitments = [
+            (resp.json()["id"], resp.json()["commitment"]) for resp in round1_responses
+        ]
+        logger.info("Frost Sign Round 1 complete...")
+        # --- Round 2: Send commitments + message to each signer
+        logger.info("Starting Frost Sign Round 2, sending out to signers...")
+        round2_tasks = []
+        for signer, (sid, _) in zip(SIGNERS, round1_commitments):
+            body = {
+                "message_hex": message_hex,
+                "commitments": round1_commitments  # All commitments
+            }
+            round2_tasks.append(client.post(f"{signer}/sign/round2", json=body))
+
+        round2_responses = await asyncio.gather(*round2_tasks)
+        sig_shares = [
+            (resp.json()["id"], resp.json()["sig_share"]) for resp in round2_responses
+        ]
+        logger.info("Starting Signature Aggregation...")
+        # --- Coordinator aggregates signature
+        aggregated_sig = rust_tss.aggregate_signature(message_hex, sig_shares, round1_commitments, pubkp_hex)
+        logger.info(f"Aggregated Schnorr Signature: {aggregated_sig}")
+        return aggregated_sig
+
+
+
+
 
 if __name__ == "__main__":
     try:
-        group_vk_hex = asyncio.run(run_dkg())
+        group_vk_hex,pubkp_hex = asyncio.run(run_dkg())
         # Create a Key object for Taproot (x-only public key)
-        key = Key(import_key=bytes.fromhex(group_vk_hex), compressed=True, network='testnet')
+        sig = asyncio.run(coordinate_frost_sign("Hello world", pubkp_hex))
+        taproot_address = rust_tss.derive_taproot_address(group_vk_hex, "testnet")
+        print("Taproot Address:", taproot_address)
 
-        # Derive the Taproot (P2TR) address
-        address = key.address(script_type ='p2tr')
-
-        print(f"Taproot Address: {address}")
-        print(f"Group Verifying Key: {group_vk_hex}")
+        # print(f"SegWit address (P2WPKH): {addr}")
+        # print(f"Group Verifying Key: {group_vk_hex}")
     except Exception as e:
         logger.error(f"DKG process failed: {e}")
         raise

@@ -32,8 +32,6 @@ logger.info(f"DKG Config: T={T}, N={N}")
 
 app = FastAPI()
 
-# REMOVED: @app.on_event("startup") async def load_keypkg(): ...
-# Persistence handled by Rust/sled, keyed by the u16 PID.
 
 # --- Helper function for error handling ---
 def handle_rust_error(e: Exception, context: str):
@@ -58,22 +56,30 @@ class DkgRound3Body(BaseModel):
 class InitBody(BaseModel):
     key_package_hex: str
     public_key_package_hex: str
+    
+# --- Models for Signing ---
+class SigningRound2Body(BaseModel):
+    message_hex: str
+    commitments: List[Tuple[str, str]]
+
 
 
 # ------- Check Key Existence Endpoint --------
 @app.get("/dkg/status")
 async def dkg_status():
-     logger.info(f"[{PID}] Received request for /dkg/status")
-     try:
-         # Call Rust FFI with integer PID
-         is_exists,verify_key_hex = rust_tss.init(PID)
-         if is_exists:
+    global PID_HEX
+    logger.info(f"[{PID}] Received request for /dkg/status")
+    try:
+        # Call Rust FFI with integer PID
+        is_exists,verify_key_hex,pubkp,id_hex = rust_tss.init(PID)
+        PID_HEX = id_hex
+        if is_exists:
             logger.info(f"[{PID}] Keys exist. Verifying Key: {verify_key_hex}")
-            return {"id": PID, "is_exist":is_exists,"verify_key_hex": verify_key_hex}
-         else:
+            return {"id": PID, "is_exist":is_exists,"verify_key_hex": verify_key_hex,"pubkp_hex": pubkp,"id_hex":id_hex}
+        else:
             logger.info(f"[{PID}] Keys do not exist.")
-            return {"id": PID, "is_exist":is_exists,"verify_key_hex": verify_key_hex}
-     except Exception as e:
+            return {"id": PID, "is_exist":is_exists,"verify_key_hex": verify_key_hex,"pubkp_hex": pubkp,"id_hex":id_hex}
+    except Exception as e:
          handle_rust_error(e, "DKG Status Check")
 
 
@@ -81,6 +87,7 @@ async def dkg_status():
 @app.post("/dkg/round1")
 async def dkg_round1_endpoint():
     global PID_HEX
+
     logger.info(f"[{PID}] Received request for /dkg/round1")
     try:
         # Call Rust FFI with integer PID
@@ -131,24 +138,39 @@ async def dkg_round3_endpoint(body: DkgRound3Body):
         logger.info(f"[{PID}] DKG Round 3 successful. Keys persisted in Rust/sled.")
         logger.info(f"[{PID}] Group public key pkg hash Verifying Key (x-only hex): {_verify_key_hex}")
         # Return the final group verifying key (needed for address generation)
-        return {"id": PID, "verify_key_hex": _verify_key_hex}
+        return {"id": PID, "verify_key_hex": _verify_key_hex,"pubkp_hex": _pubkp_hex}
     except Exception as e:
         handle_rust_error(e, "DKG Round 3")
 
+# ------- For signing --------
 
-# ------- Optional: Endpoint to Initialize from External Data --------
-# If you need the init functionality, expose it via an endpoint
-# This uses the Rust `init` function you provided (which takes u16 PID)
-@app.post("/dkg/init_external")
-async def dkg_init_external(body: InitBody):
-     logger.info(f"[{PID}] Received request for /dkg/init_external")
-     try:
-          rust_tss.init( # Call the original init function name
-               PID,
-               body.key_package_hex,
-               body.public_key_package_hex
-          )
-          logger.info(f"[{PID}] Successfully initialized state from external hex data.")
-          return {"id": PID, "status": "initialized from external"}
-     except Exception as e:
-          handle_rust_error(e, "DKG Init External")
+@app.post("/sign/round1")
+async def signing_round1():
+    try:
+        logger.info(f"[{PID}] Received request for /sign/round1")
+        commitments_hex = rust_tss.sign_round1(PID_HEX)
+        logger.info(f"[{PID}] Frost signing Round 1 successful.")
+        # Return structure contains PID
+        return {"id": PID_HEX, "commitment": commitments_hex}
+    except Exception as e:
+        handle_rust_error(e, "Signing Round 1")
+
+@app.post("/sign/round2")
+async def signing_round2(body: SigningRound2Body):
+    try:
+        is_valid = dummy_verify(body.message_hex)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail="Invalid message hex, potentially malformed transaction, decline to sign.")
+        logger.info(f"[{PID}] Received request for /sign/round2")
+        sig_share_hex = rust_tss.sign_round2(PID_HEX, body.message_hex, body.commitments)
+        logger.info(f"[{PID}] Frost signing Round 2 successful.")
+        return {"id": PID_HEX, "sig_share": sig_share_hex}
+    except Exception as e:
+        handle_rust_error(e, "Signing Round 2")
+        
+        
+def dummy_verify(message_hex: str):
+    # Dummy verification function
+    # In a real-world scenario, you would implement the actual verification logic here
+    return True
+
