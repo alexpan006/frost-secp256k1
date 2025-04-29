@@ -4,9 +4,11 @@ import json
 import logging
 from typing import List, Tuple
 import os
+import requests
 from bitcoinlib.keys import Key,Address
 import rust_tss as rust_tss
-
+from bitcoinlib.services.services import Service 
+from bitcoinlib.transactions import Transaction
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -151,9 +153,8 @@ async def run_dkg():
 
 
 async def coordinate_frost_sign(message: str, pubkp_hex: str):
-    message_bytes = message.encode()
-    message_hex = message_bytes.hex()
 
+    logger.info(f"From the FUnction: Message to sign: {message}")
     async with httpx.AsyncClient() as client:
         # --- Round 1: Get commitments from each signer
         logger.info("Starting Frost Sign Round 1, sending out to signers...")
@@ -168,7 +169,7 @@ async def coordinate_frost_sign(message: str, pubkp_hex: str):
         round2_tasks = []
         for signer, (sid, _) in zip(SIGNERS, round1_commitments):
             body = {
-                "message_hex": message_hex,
+                "message_hex": message,
                 "commitments": round1_commitments  # All commitments
             }
             round2_tasks.append(client.post(f"{signer}/sign/round2", json=body))
@@ -179,10 +180,158 @@ async def coordinate_frost_sign(message: str, pubkp_hex: str):
         ]
         logger.info("Starting Signature Aggregation...")
         # --- Coordinator aggregates signature
-        aggregated_sig = rust_tss.aggregate_signature(message_hex, sig_shares, round1_commitments, pubkp_hex)
+        aggregated_sig = rust_tss.aggregate_signature(message, sig_shares, round1_commitments, pubkp_hex)
         logger.info(f"Aggregated Schnorr Signature: {aggregated_sig}")
         return aggregated_sig
 
+def broadcast_tx(tx_hex: str, network: str = "testnet") -> str:
+    """
+    Broadcast the signed transaction using Bitcoinlib.
+    """
+    service = Service(network=network)
+    txid = service.sendrawtransaction(tx_hex)
+    logger.info(f"Broadcasted transaction. TXID: {txid}")
+    return txid
+
+def broadcast_tx_mempool(tx_hex: str):
+    url = "https://mempool.space/testnet/api/tx"
+    headers = {"Content-Type": "text/plain"}
+    response = requests.post(url, data=tx_hex, headers=headers)
+    
+    if response.status_code != 200:
+        raise Exception(f"Broadcast failed: {response.text}")
+    
+    txid = response.text.strip()
+    return txid
+
+def fetch_fee_rate(network='testnet', priority='medium') -> int:
+    """
+    Fetch estimated fee rate (sats/vbyte) using bitcoinlib's estimatefee.
+    
+    Args:
+        network (str): 'mainnet' | 'testnet' etc
+        priority (str): 'low' | 'medium' | 'high'
+        
+    Returns:
+        int: fee rate in sats/vbyte
+    """
+    service = Service(network=network)
+    fee_per_kb = service.estimatefee(priority=priority)
+
+    if not isinstance(fee_per_kb, int):
+        raise ValueError(f"Invalid fee estimation response: {fee_per_kb}")
+    
+    # estimatefee returns fee per kilobyte → divide by 1000 to get per-byte
+    fee_per_byte = fee_per_kb // 1000  
+
+    if fee_per_byte == 0:
+        # fallback to reasonable default
+        fee_per_byte = 5
+    
+    print(f"Estimated fee rate ({priority}): {fee_per_byte} sats/vbyte")
+    return fee_per_byte
+def decode_signed_tx(signed_tx_hex: str):
+    """
+    Decode and inspect a signed Bitcoin transaction hex.
+    
+    Args:
+        signed_tx_hex (str): The hex-encoded signed transaction.
+    
+    Returns:
+        dict: Parsed details like inputs, outputs, amounts.
+    """
+    tx = Transaction.import_raw(signed_tx_hex)
+    
+    decoded = {
+        "version": tx.version,
+        "locktime": tx.locktime,
+        "inputs": [],
+        "outputs": [],
+        "txid": tx.txid,
+    }
+
+    # Parse inputs
+    for inp in tx.inputs:
+        decoded["inputs"].append({
+            "prev_txid": inp.txid,
+            "vout": inp.txindex,
+            "script_sig": inp.script,
+            "sequence": inp.sequence,
+        })
+
+    # Parse outputs
+    for outp in tx.outputs:
+        decoded["outputs"].append({
+            "value_satoshi": outp.value,
+            "address": outp.address,
+            "script_pubkey": outp.script,
+        })
+    
+    return decoded
+
+async def propose_tx_and_sign(
+    utxo_txid: str,
+    utxo_vout: int,
+    utxo_value: int,
+    prev_spk_hex:str,
+    to_address: str,
+    send_value: int,
+    change_address: str,
+    network: str,
+    pubkp_hex: str,
+):
+    """
+    Prepares a transaction dynamically (with fee estimation), gets FROST signature, and finalizes it.
+
+    Args:
+        utxo_txid: The TXID of the UTXO to spend.
+        utxo_vout: The vout (output index) of the UTXO.
+        utxo_value: The value of the UTXO (in sats).
+        to_address: Recipient address.
+        send_value: Amount to send (in sats).
+        change_address: Change address to send leftover funds to.
+        network: 'mainnet' | 'testnet'
+        pubkp_hex: Group public key package hex (for FROST aggregation).
+
+    Returns:
+        signed_tx_hex (str)
+    """
+
+    logger.info("Fetching fee rate...")
+    # service = Service(network=network)
+    # fee_per_kb = service.estimatefee(priority='medium')
+    # if not isinstance(fee_per_kb, int):
+    #     raise ValueError(f"Invalid fee estimation response: {fee_per_kb}")
+
+    # fee_rate = fee_per_kb // 1000
+    fee_rate = 2
+    if fee_rate == 0:
+        fee_rate = 5  # Fallback minimum fee rate
+    logger.info(f"Estimated fee rate: {fee_rate} sats/vbyte")
+
+
+    logger.info("Preparing unsigned transaction and sighash...")
+    tx_hex, sighash_hex = rust_tss.prepare_unsigned_tx_and_sighash(
+        utxo_txid,
+        utxo_vout,
+        utxo_value,
+        prev_spk_hex,
+        to_address,
+        send_value,
+        fee_rate,
+        change_address,
+        network
+    )
+
+    logger.info("Starting FROST signing over sighash...")
+    logger.info(f"Transaction Hex: {tx_hex}")
+    logger.info(f"Sighash Hex: {sighash_hex}")
+    sig_hex = await coordinate_frost_sign(sighash_hex, pubkp_hex)
+
+    logger.info("Finalizing the signed transaction...")
+    signed_tx_hex = rust_tss.finalize_signed_tx_from_hex(tx_hex, sig_hex)
+
+    return signed_tx_hex
 
 
 
@@ -190,13 +339,50 @@ async def coordinate_frost_sign(message: str, pubkp_hex: str):
 if __name__ == "__main__":
     try:
         group_vk_hex,pubkp_hex = asyncio.run(run_dkg())
-        # Create a Key object for Taproot (x-only public key)
-        sig = asyncio.run(coordinate_frost_sign("Hello world", pubkp_hex))
         taproot_address = rust_tss.derive_taproot_address(group_vk_hex, "testnet")
         print("Taproot Address:", taproot_address)
+        
+        
+        
+        # result = asyncio.run(coordinate_frost_sign("Hello, world!", pubkp_hex))
+            
+        #--------- Create a Bitcoin trx ---------
+        # 🧪 Example transaction proposal
+        utxo_txid = "1d7f589fd9b002d5408c7817e24b57bcdb71ee7dbbf22290a8501f8ca365ead0"
+        utxo_vout = 0
+        utxo_value = 4000  # in sats
+        prev_spk_hex = "512017076568add0ef98140f090cbc3e4d44672307d742792641bf6596001ccc77a2"
+        to_address = "tb1qn05lrx8q5tajvnc6lc30sa8fzasjmey6fnl3p0"
+        send_value = 1000  # in sats
+        change_address = "tb1pzurk269d6rhes9q0pyxtc0jdg3njxp7hgfujvsdlvktqq8xvw73qh8g48a"
+        network = "testnet"
 
-        # print(f"SegWit address (P2WPKH): {addr}")
-        # print(f"Group Verifying Key: {group_vk_hex}")
+        # ✅ Note: no more change_value input here
+        signed_tx_hex = asyncio.run(
+            propose_tx_and_sign(
+                utxo_txid,
+                utxo_vout,
+                utxo_value,
+                prev_spk_hex,
+                to_address,
+                send_value,
+                change_address,
+                network,
+                pubkp_hex
+            )
+        )
+
+        print("Signed Transaction Hex:", signed_tx_hex)
+
+        # parsed = decode_signed_tx(signed_tx_hex)
+        # print(json.dumps(parsed, indent=2))
+
+        # Skip broadcasting for now
+        # # 🎯 Broadcast (optional)
+        txid = broadcast_tx_mempool(signed_tx_hex)
+        # txid = broadcast_tx(signed_tx_hex)
+        print("Broadcasted TXID:", txid)
+
     except Exception as e:
         logger.error(f"DKG process failed: {e}")
         raise
