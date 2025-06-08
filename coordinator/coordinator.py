@@ -75,16 +75,10 @@ async def run_dkg():
         # Extract id and pkg_hex from each response
         r1_pkgs: List[Tuple[str, str]] = [(data["id_hex"], data["pkg_hex"]) for data in round1_data]
         logger.info(f"Round 1 completed. Collected packages: {r1_pkgs}")
-
-
-
-
-
         # --- Round 2: Distribute Round 1 packages and collect Round 2 packages ---
         logger.info("Starting DKG Round 2...")
         round2_tasks = []
         for signer, self_id in zip(SIGNERS, [data["id_hex"] for data in round1_data]):
-            # logger.info(f"Signer =  {signer}, for Round 2")
             # Exclude the signer's own package
             pkgs_for_signer = [pkg for pkg in r1_pkgs if pkg[0] != self_id]
             body = {"pkgs_hex": pkgs_for_signer}
@@ -99,7 +93,6 @@ async def run_dkg():
 
         # Extract id and pkgs2_json from each response
         r2_pkgs_json = [(data["id_hex"],data["pkgs2_json"]) for data in round2_data]
-        # logger.info(f"Round 2 completed. Collected packages: {r2_pkgs_json}")
 
         # Parse the JSON strings to get the actual Round 2 packages
         r2_pkgs: List[Tuple[int, Tuple[int, str]]] = []
@@ -118,9 +111,6 @@ async def run_dkg():
         round3_tasks = []
         for signer, self_id in zip(SIGNERS, [data["id_hex"] for data in round1_data]):
             # All Round 1 packages are sent to every signer
-            # r1_pkgs_for_signer = r1_pkgs
-            # r1_pkgs_for_signer = r1_pkgs
-            # logger.info(f"Signer =  {r1_pkgs_for_signer}, for Round 3")
             r1_pkgs_for_signer = [
                 (sender_id, pkg) for sender_id, pkg in r1_pkgs if sender_id != self_id
             ]
@@ -132,11 +122,7 @@ async def run_dkg():
                 "r1_pkgs_hex": r1_pkgs_for_signer,
                 "r2_pkgs_hex": r2_pkgs_for_signer
             }
-            # logger.info(f"Sending Round 3 packages to {signer}: {body}")
-            
-            # logger.info(f"Sending Round 3 packages to {signer}: {body}")
             round3_tasks.append(client.post(f"{signer}/dkg/round3", json=body))
-
         try:
             round3_responses = await asyncio.gather(*round3_tasks)
             round3_data = [resp.json() for resp in round3_responses]
