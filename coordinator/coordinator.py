@@ -10,9 +10,29 @@ import rust_tss as rust_tss
 from bitcoinlib.services.services import Service 
 from bitcoinlib.transactions import Transaction
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+class CustomFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        ct = self.converter(record.created)
+        if datefmt:
+            s = self.formatter_time_with_ms(ct, record)
+        else:
+            s = logging.Formatter.formatTime(self, record, datefmt)
+        return s
 
+    def formatter_time_with_ms(self, ct, record):
+        return f"{ct.tm_year}-{ct.tm_mon:02}-{ct.tm_mday:02} {ct.tm_hour:02}:{ct.tm_min:02}:{ct.tm_sec:02}.{int(record.msecs):03}"
+
+formatter = CustomFormatter(
+    fmt='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+)
+
+handler = logging.StreamHandler()
+handler.setFormatter(formatter)
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.addHandler(handler)
+logger.propagate = False  # Avoid double logging if root logger also set
 # Read signer URLs from environment variable
 signer_urls_str = os.getenv("SIGNER_URLS")
 if not signer_urls_str:
@@ -74,7 +94,7 @@ async def run_dkg():
 
         # Extract id and pkg_hex from each response
         r1_pkgs: List[Tuple[str, str]] = [(data["id_hex"], data["pkg_hex"]) for data in round1_data]
-        logger.info(f"Round 1 completed. Collected packages: {r1_pkgs}")
+        logger.info(f"Round 1 completed.")
         # --- Round 2: Distribute Round 1 packages and collect Round 2 packages ---
         logger.info("Starting DKG Round 2...")
         round2_tasks = []
@@ -101,8 +121,8 @@ async def run_dkg():
             for pkg in pkgs:
                 target_id, pkg_hex = pkg
                 r2_pkgs.append((sender_id, (target_id, pkg_hex)))
-        logger.info(f"Parsed Round 2 packages: {r2_pkgs}")
-        
+        # logger.info(f"Parsed Round 2 packages: {r2_pkgs}")
+        logger.info(f"Round 2 Completed")
         
         
         
@@ -326,24 +346,21 @@ if __name__ == "__main__":
     try:
         group_vk_hex,pubkp_hex = asyncio.run(run_dkg())
         taproot_address = rust_tss.derive_taproot_address(group_vk_hex, "testnet")
-        print("Taproot Address:", taproot_address)
+        logger.info(f"Taproot Address:{taproot_address}")
         
         
         
-        # result = asyncio.run(coordinate_frost_sign("Hello, world!", pubkp_hex))
             
         #--------- Create a Bitcoin trx ---------
-        # 🧪 Example transaction proposal
-        utxo_txid = "1d7f589fd9b002d5408c7817e24b57bcdb71ee7dbbf22290a8501f8ca365ead0"
-        utxo_vout = 0
-        utxo_value = 4000  # in sats
-        prev_spk_hex = "512017076568add0ef98140f090cbc3e4d44672307d742792641bf6596001ccc77a2"
+        utxo_txid = "dcbd3f80714a0801a9e3003871de5f4588ed3406b8a03cbd348ebd4ab9e2594c"
+        utxo_vout = 1
+        utxo_value = 10000  # in sats
+        prev_spk_hex = "51208dff1b7bccbdcd161d9dfa3e3f8c1084dd25bd76be9b108aa624e6facb334d46"
         to_address = "tb1qn05lrx8q5tajvnc6lc30sa8fzasjmey6fnl3p0"
-        send_value = 1000  # in sats
-        change_address = "tb1pzurk269d6rhes9q0pyxtc0jdg3njxp7hgfujvsdlvktqq8xvw73qh8g48a"
+        send_value = 5000  # in sats
+        change_address = "tb1p3hl3k77vhhx3v8valglrlrqssnwjt0tkh6d3pz4xynn04jenf4rq95gqcm"
         network = "testnet"
-
-        # ✅ Note: no more change_value input here
+        logger.info(f"Preparing to propose transaction with UTXO {utxo_txid}:{utxo_vout} of value {utxo_value} sats")
         signed_tx_hex = asyncio.run(
             propose_tx_and_sign(
                 utxo_txid,
@@ -358,16 +375,9 @@ if __name__ == "__main__":
             )
         )
 
-        print("Signed Transaction Hex:", signed_tx_hex)
-
-        # parsed = decode_signed_tx(signed_tx_hex)
-        # print(json.dumps(parsed, indent=2))
-
-        # Skip broadcasting for now
-        # # 🎯 Broadcast (optional)
-        txid = broadcast_tx_mempool(signed_tx_hex)
-        # txid = broadcast_tx(signed_tx_hex)
-        print("Broadcasted TXID:", txid)
+        logger.info(f"Signed Transaction Hex:{signed_tx_hex}")
+        # txid = broadcast_tx_mempool(signed_tx_hex)
+        # logger.info(f"Broadcasted TXID:{txid}")
 
     except Exception as e:
         logger.error(f"DKG process failed: {e}")

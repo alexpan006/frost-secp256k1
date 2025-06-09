@@ -9,7 +9,11 @@ import logging
 # Assuming your compiled rust lib is importable as rust_ffi
 import rust_tss as rust_tss
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 logger = logging.getLogger(__name__)
 
 # --- Configuration & PID Handling ---
@@ -74,7 +78,7 @@ async def dkg_status():
         is_exists,verify_key_hex,pubkp,id_hex = rust_tss.init(PID)
         PID_HEX = id_hex
         if is_exists:
-            logger.info(f"[{PID}] Keys exist. Verifying Key: {verify_key_hex}")
+            # logger.info(f"[{PID}] Keys exist. Verifying Key: {verify_key_hex}")
             return {"id": PID, "is_exist":is_exists,"verify_key_hex": verify_key_hex,"pubkp_hex": pubkp,"id_hex":id_hex}
         else:
             logger.info(f"[{PID}] Keys do not exist.")

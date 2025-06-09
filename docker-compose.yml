@@ -6,9 +6,9 @@ services:
     environment:
       PARTY_ID: "1"
       TOTAL: "3"
-      THRESHOLD: "2"
+      THRESHOLD: "3"
     ports:
-      - "10000:8000"
+      - "11000:8000"
     volumes:
       - signer1_state:/state
 
@@ -19,9 +19,9 @@ services:
     environment:
       PARTY_ID: "2"
       TOTAL: "3"
-      THRESHOLD: "2"
+      THRESHOLD: "3"
     ports:
-      - "10001:8000"
+      - "11001:8000"
     volumes:
       - signer2_state:/state
 
@@ -32,11 +32,14 @@ services:
     environment:
       PARTY_ID: "3"
       TOTAL: "3"
-      THRESHOLD: "2"
+      THRESHOLD: "3"
     ports:
-      - "10002:8000"
+      - "11002:8000"
     volumes:
       - signer3_state:/state
+
+
+
 
   coordinator:
     build:
