@@ -1,11 +1,10 @@
-FROM rust:1.86 AS builder
+FROM ghcr.io/pyo3/maturin as builder
 
 WORKDIR /rustlib
 COPY rustlib/ ./
-RUN cargo install maturin
 RUN maturin build --release --out /wheels
 
-FROM python:3.11-slim
+FROM python:3.9-slim
 
 WORKDIR /app
 COPY signer/requirements.txt ./

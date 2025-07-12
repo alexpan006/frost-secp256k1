@@ -304,12 +304,6 @@ async def propose_tx_and_sign(
     """
 
     logger.info("Fetching fee rate...")
-    # service = Service(network=network)
-    # fee_per_kb = service.estimatefee(priority='medium')
-    # if not isinstance(fee_per_kb, int):
-    #     raise ValueError(f"Invalid fee estimation response: {fee_per_kb}")
-
-    # fee_rate = fee_per_kb // 1000
     fee_rate = 2
     if fee_rate == 0:
         fee_rate = 5  # Fallback minimum fee rate
@@ -350,35 +344,51 @@ if __name__ == "__main__":
         
         
         
-            
-        #--------- Create a Bitcoin trx ---------
-        utxo_txid = "dcbd3f80714a0801a9e3003871de5f4588ed3406b8a03cbd348ebd4ab9e2594c"
-        utxo_vout = 1
-        utxo_value = 10000  # in sats
-        prev_spk_hex = "51208dff1b7bccbdcd161d9dfa3e3f8c1084dd25bd76be9b108aa624e6facb334d46"
-        to_address = "tb1qn05lrx8q5tajvnc6lc30sa8fzasjmey6fnl3p0"
-        send_value = 5000  # in sats
-        change_address = "tb1p3hl3k77vhhx3v8valglrlrqssnwjt0tkh6d3pz4xynn04jenf4rq95gqcm"
-        network = "testnet"
-        logger.info(f"Preparing to propose transaction with UTXO {utxo_txid}:{utxo_vout} of value {utxo_value} sats")
-        signed_tx_hex = asyncio.run(
-            propose_tx_and_sign(
-                utxo_txid,
-                utxo_vout,
-                utxo_value,
-                prev_spk_hex,
-                to_address,
-                send_value,
-                change_address,
-                network,
-                pubkp_hex
-            )
-        )
-
-        logger.info(f"Signed Transaction Hex:{signed_tx_hex}")
+        # ===================== IMPORTANT USAGE NOTES =====================
+        # 1. The DKG process must be completed first. This will generate the group Taproot address.
+        #    This address represents the joint control of the bridge and should be used for all subsequent operations.
+        #
+        # 2. Before you can create and sign a transaction from the bridge account, you must ensure that the Taproot address
+        #    has received sufficient funds. This is a prerequisite for demonstrating the signing and spending process.
+        #
+        # 3. The transaction creation and signing (see the commented-out section below) is NOT a common operation for bridge setup.
+        #    It is included here for demonstration purposes only. Please refer to the thesis for more details on when and why
+        #    you might need to perform such an operation.
+        #
+        # 4. To proceed:
+        #    - Send funds to the generated Taproot address.
+        #    - Set the transaction parameters (utxo_txid, utxo_vout, utxo_value, prev_spk_hex, to_address, send_value, change_address, network)
+        #      according to the actual UTXO you control.
+        #    - Uncomment and run the transaction proposal and signing code as needed.
+        # ================================================================
+        
+        # --------- Create a Bitcoin trx (fill in your own UTXO and addresses) ---------
+        # utxo_txid = "<YOUR_UTXO_TXID_HERE>"
+        # utxo_vout = <YOUR_UTXO_VOUT_HERE>
+        # utxo_value = <YOUR_UTXO_VALUE_IN_SATS>
+        # prev_spk_hex = "<YOUR_PREV_SCRIPT_PUBKEY_HEX>"
+        # to_address = "<RECIPIENT_ADDRESS>"
+        # send_value = <AMOUNT_TO_SEND_IN_SATS>
+        # change_address = "<YOUR_CHANGE_ADDRESS>"
+        # network = "<NETWORK_NAME>"  # e.g., "testnet" or "mainnet"
+        # logger.info(f"Preparing to propose transaction with UTXO {utxo_txid}:{utxo_vout} of value {utxo_value} sats")
+        # signed_tx_hex = asyncio.run(
+        #     propose_tx_and_sign(
+        #         utxo_txid,
+        #         utxo_vout,
+        #         utxo_value,
+        #         prev_spk_hex,
+        #         to_address,
+        #         send_value,
+        #         change_address,
+        #         network,
+        #         pubkp_hex
+        #     )
+        # )
+        # logger.info(f"Signed Transaction Hex:{signed_tx_hex}")
         # txid = broadcast_tx_mempool(signed_tx_hex)
         # logger.info(f"Broadcasted TXID:{txid}")
-
+        
     except Exception as e:
         logger.error(f"DKG process failed: {e}")
         raise
